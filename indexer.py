@@ -14,6 +14,7 @@ stemmer = PorterStemmer()
 
 
 def tokenize(text):
+    # do we need to worry about apostrophes? maybe just strip()
     tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
     return [stemmer.stem(token) for token in tokens]
 
@@ -81,26 +82,31 @@ class Indexer:
         self.index = {}  # Reset safely
 
     def process_directory(self, root_dir):
-        for subdir, _, files in os.walk(root_dir):
-            for file in files:
-                if file.endswith(".json"):
-                    path = os.path.join(subdir, file)
+        for root, dirs, files in os.walk(root_dir):
+            # iterate through the directories
+            for dir in dirs:
+                dir_path = os.path.join(root, dir)
+                for dir, subdirs, dir_files in os.walk(dir_path):
+                    # getting json files within the directory
+                    for file in dir_files:
+                        if file.endswith(".json"):
+                            path = os.path.join(dir, file)
 
-                    try:
-                        with open(path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                    except Exception:
-                        continue  # Skip bad JSON files
+                            try:
+                                with open(path, "r", encoding="utf-8") as f:
+                                    data = json.load(f)
+                            except Exception:
+                                continue  # Skip bad JSON files
 
-                    content = data.get("content", "")
+                            content = data.get("content", "")
 
-                    doc_id = self.doc_count
-                    self.doc_count += 1
+                            doc_id = self.doc_count
+                            self.doc_count += 1
 
-                    self.add_document(doc_id, content)
+                            self.add_document(doc_id, content)
 
-                    if len(self.index) >= PARTIAL_DUMP_THRESHOLD:
-                        self.flush_partial_index()
+                            if len(self.index) >= PARTIAL_DUMP_THRESHOLD:
+                                self.flush_partial_index()
 
         # Final flush
         if self.index:

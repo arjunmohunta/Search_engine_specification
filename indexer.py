@@ -8,6 +8,7 @@ from nltk.stem import PorterStemmer
 
 PARTIAL_DUMP_THRESHOLD = 10000
 INDEX_DIR = "index_files"
+MAPPING_FILE = "url_mappings.json"
 os.makedirs(INDEX_DIR, exist_ok=True)
 
 stemmer = PorterStemmer()
@@ -46,6 +47,7 @@ def extract_text_and_importance(html):
 class Indexer:
     def __init__(self):
         self.index = {}
+        self.mapping = {}
         self.doc_count = 0
         self.partial_index_count = 0
 
@@ -99,18 +101,26 @@ class Indexer:
                                 continue  # Skip bad JSON files
 
                             content = data.get("content", "")
+                            url = data.get("url", "")
 
-                            doc_id = self.doc_count
-                            self.doc_count += 1
+                            if content and url: # add url, content if both url and content are not empty
+                                doc_id = self.doc_count
+                                self.doc_count += 1
 
-                            self.add_document(doc_id, content)
+                                self.mapping[url] = doc_id
 
-                            if len(self.index) >= PARTIAL_DUMP_THRESHOLD:
-                                self.flush_partial_index()
+                                self.add_document(doc_id, content)
+
+                                if len(self.index) >= PARTIAL_DUMP_THRESHOLD:
+                                    self.flush_partial_index()
 
         # Final flush
         if self.index:
             self.flush_partial_index()
+        
+        # store url mapping
+        with open(MAPPING_FILE, "w") as f:
+            json.dump(self.mapping)
 
     def merge_partials(self):
         merged_index = {}

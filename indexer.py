@@ -1,10 +1,16 @@
+import math
 import os
 import json
 import pickle
 import re
 import sys
-from bs4 import BeautifulSoup
-from nltk.stem import PorterStemmer
+from bs4 import BeautifulSoup  # type: ignore[import-untyped]
+
+try:
+    from nltk.stem import PorterStemmer  # type: ignore[import-untyped]
+    _stemmer = PorterStemmer()
+except ModuleNotFoundError:
+    _stemmer = None  # no stemming if nltk not installed
 
 PARTIAL_DUMP_THRESHOLD = 10000
 INDEX_DIR = "index_files"
@@ -12,12 +18,12 @@ os.makedirs(INDEX_DIR, exist_ok=True)
 
 MAPPING_FILE = os.path.join(INDEX_DIR, "url_mappings.pkl")
 
-stemmer = PorterStemmer()
-
 
 def tokenize(text):
     tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
-    return [stemmer.stem(token) for token in tokens]
+    if _stemmer is not None:
+        return [_stemmer.stem(t) for t in tokens]
+    return tokens
 
 
 def extract_text_and_importance(html):
@@ -144,6 +150,21 @@ class Indexer:
                     merged_index[term][doc_id]["tf"] += values["tf"]
                     merged_index[term][doc_id]["importance"] += values["importance"]
 
+        # Extra credit: compute and store TF-IDF for each posting
+        N = self.doc_count
+        if N > 0:
+            for term, postings in merged_index.items():
+                df = len(postings)
+                if df > 0:
+                    idf = math.log(N / df)
+                    for doc_id, values in postings.items():
+                        tf = values["tf"]
+                        if tf > 0:
+                            # log-tf normalization: 1 + log(tf), then multiply by idf
+                            values["tf_idf"] = (1.0 + math.log(tf)) * idf
+                        else:
+                            values["tf_idf"] = 0.0
+
         final_path = os.path.join(INDEX_DIR, "final_index.pkl")
 
         with open(final_path, "wb") as f:
@@ -167,6 +188,17 @@ def compute_analytics(indexer, merged_index):
     print("Number of indexed documents:", num_docs)
     print("Number of unique tokens:", num_tokens)
     print("Total index size (KB):", round(total_size_kb, 2))
+
+    # Extra credit: write analytics table to file for report (copy into Index_Report.pdf)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    report_path = os.path.join(script_dir, "index_analytics_report.txt")
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("INDEX ANALYTICS (for report table)\n")
+        f.write("---------------------------------\n")
+        f.write(f"Number of indexed documents:  {num_docs}\n")
+        f.write(f"Number of unique tokens:     {num_tokens}\n")
+        f.write(f"Total index size (KB):       {round(total_size_kb, 2)}\n")
+    print(f"\nAnalytics report written to {report_path}")
 
 
 if __name__ == "__main__":

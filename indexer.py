@@ -4,13 +4,14 @@ import json
 import pickle
 import re
 import sys
-from bs4 import BeautifulSoup  # type: ignore[import-untyped]
+import hashlib
+from bs4 import BeautifulSoup
 
 try:
-    from nltk.stem import PorterStemmer  # type: ignore[import-untyped]
+    from nltk.stem import PorterStemmer
     _stemmer = PorterStemmer()
 except ModuleNotFoundError:
-    _stemmer = None  # no stemming if nltk not installed
+    _stemmer = None
 
 PARTIAL_DUMP_THRESHOLD = 10000
 INDEX_DIR = "index_files"
@@ -22,8 +23,12 @@ MAPPING_FILE = os.path.join(INDEX_DIR, "url_mappings.pkl")
 def tokenize(text):
     tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
     if _stemmer is not None:
-        return [_stemmer.stem(t) for t in tokens]
+        tokens = [_stemmer.stem(t) for t in tokens]
     return tokens
+
+
+def generate_bigrams(tokens):
+    return [tokens[i] + "_" + tokens[i + 1] for i in range(len(tokens) - 1)]
 
 
 def extract_text_and_importance(html):
@@ -55,6 +60,19 @@ class Indexer:
         self.mapping = {}
         self.doc_count = 0
         self.partial_index_count = 0
+        self.seen_hashes = set()  # duplicate detection
+
+    def add_token(self, token, doc_id, is_important=False):
+        if token not in self.index:
+            self.index[token] = {}
+
+        if doc_id not in self.index[token]:
+            self.index[token][doc_id] = {"tf": 0, "importance": 0}
+
+        if is_important:
+            self.index[token][doc_id]["importance"] += 1
+        else:
+            self.index[token][doc_id]["tf"] += 1
 
     def add_document(self, doc_id, content):
         normal_text, important_text = extract_text_and_importance(content)
@@ -62,23 +80,17 @@ class Indexer:
         normal_tokens = tokenize(normal_text)
         important_tokens = tokenize(important_text)
 
+        
         for token in normal_tokens:
-            if token not in self.index:
-                self.index[token] = {}
-
-            if doc_id not in self.index[token]:
-                self.index[token][doc_id] = {"tf": 0, "importance": 0}
-
-            self.index[token][doc_id]["tf"] += 1
+            self.add_token(token, doc_id, is_important=False)
 
         for token in important_tokens:
-            if token not in self.index:
-                self.index[token] = {}
+            self.add_token(token, doc_id, is_important=True)
 
-            if doc_id not in self.index[token]:
-                self.index[token][doc_id] = {"tf": 0, "importance": 0}
-
-            self.index[token][doc_id]["importance"] += 1
+        
+        normal_bigrams = generate_bigrams(normal_tokens)
+        for bigram in normal_bigrams:
+            self.add_token(bigram, doc_id, is_important=False)
 
     def flush_partial_index(self):
         filename = os.path.join(
@@ -109,6 +121,17 @@ class Indexer:
                     url = data.get("url", "")
 
                     if content and url:
+
+                        
+                        content_hash = hashlib.sha256(
+                            content.encode("utf-8")
+                        ).hexdigest()
+
+                        if content_hash in self.seen_hashes:
+                            continue
+
+                        self.seen_hashes.add(content_hash)
+
                         doc_id = self.doc_count
                         self.doc_count += 1
 
@@ -150,7 +173,7 @@ class Indexer:
                     merged_index[term][doc_id]["tf"] += values["tf"]
                     merged_index[term][doc_id]["importance"] += values["importance"]
 
-        # Extra credit: compute and store TF-IDF for each posting
+        
         N = self.doc_count
         if N > 0:
             for term, postings in merged_index.items():
@@ -160,7 +183,6 @@ class Indexer:
                     for doc_id, values in postings.items():
                         tf = values["tf"]
                         if tf > 0:
-                            # log-tf normalization: 1 + log(tf), then multiply by idf
                             values["tf_idf"] = (1.0 + math.log(tf)) * idf
                         else:
                             values["tf_idf"] = 0.0
@@ -188,17 +210,6 @@ def compute_analytics(indexer, merged_index):
     print("Number of indexed documents:", num_docs)
     print("Number of unique tokens:", num_tokens)
     print("Total index size (KB):", round(total_size_kb, 2))
-
-    # Extra credit: write analytics table to file for report (copy into Index_Report.pdf)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    report_path = os.path.join(script_dir, "index_analytics_report.txt")
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write("INDEX ANALYTICS (for report table)\n")
-        f.write("---------------------------------\n")
-        f.write(f"Number of indexed documents:  {num_docs}\n")
-        f.write(f"Number of unique tokens:     {num_tokens}\n")
-        f.write(f"Total index size (KB):       {round(total_size_kb, 2)}\n")
-    print(f"\nAnalytics report written to {report_path}")
 
 
 if __name__ == "__main__":

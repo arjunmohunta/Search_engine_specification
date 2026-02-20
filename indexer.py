@@ -8,7 +8,7 @@ from nltk.stem import PorterStemmer
 
 PARTIAL_DUMP_THRESHOLD = 10000
 INDEX_DIR = "index_files"
-MAPPING_FILE = "url_mappings.json"
+MAPPING_FILE = "url_mappings.pkl"
 os.makedirs(INDEX_DIR, exist_ok=True)
 
 stemmer = PorterStemmer()
@@ -119,8 +119,8 @@ class Indexer:
             self.flush_partial_index()
         
         # store url mapping
-        with open(MAPPING_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.mapping, f, indent = 4)
+        with open(MAPPING_FILE, "wb", encoding="utf-8") as f:
+            pickle.dump(self.mapping, f)
 
     def merge_partials(self):
         merged_index = {}

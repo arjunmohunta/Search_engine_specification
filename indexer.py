@@ -119,8 +119,8 @@ class Indexer:
             self.flush_partial_index()
         
         # store url mapping
-        with open(MAPPING_FILE, "w") as f:
-            json.dump(self.mapping)
+        with open(MAPPING_FILE, "w", encoding="utf-8") as f:
+            json.dump(self.mapping, f, indent = 4)
 
     def merge_partials(self):
         merged_index = {}

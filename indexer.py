@@ -71,20 +71,20 @@ class Indexer:
         for root, _, files in os.walk(root_dir):
             for file in files:
                 if not file.endswith(".json"):
-                    continue
+                    continue    # check for json file
                 path = os.path.join(root, file)
                 try:
                     with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
                 except Exception:
-                    continue
+                    continue    # skip bad json files
 
                 content = data.get("content", "")
                 url     = data.get("url", "")
                 if not content or not url:
-                    continue
+                    continue    # if url or content is empty do not continue
 
-                
+                # use hashes to check for duplicates and near duplicates
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 if content_hash in self.seen_hashes:
                     self.duplicate_count += 1
@@ -123,7 +123,7 @@ class Indexer:
         term_dict = {}
 
         with open(POSTINGS_FILE, "wb") as postings_f:
-            for idx, term in enumerate(sorted(term_to_partials)):
+            for term in sorted(term_to_partials):
                 merged = {}
                 for i in term_to_partials[term]:
                     for doc_id, values in partials[i][term].items():

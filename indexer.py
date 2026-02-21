@@ -1,3 +1,4 @@
+#Team members id - 45885756, 87608468, 50527916, 80654131
 import os
 import json
 import pickle
@@ -6,7 +7,6 @@ import sys
 import hashlib
 from collections import defaultdict
 from bs4 import BeautifulSoup
-""" Team members id - 45885756, 87608468, 50527916, 80654131"""
 try:
     from nltk.stem import PorterStemmer
     _stemmer = PorterStemmer()
@@ -84,7 +84,7 @@ class Indexer:
                 if not content or not url:
                     continue    # if url or content is empty do not continue
 
-                # use hashes to check for duplicates and near duplicates
+                # use hashes to check for duplicates
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 if content_hash in self.seen_hashes:
                     self.duplicate_count += 1
@@ -158,7 +158,7 @@ class Indexer:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python m1_indexer.py <dataset_path>")
+        print("Usage: python indexer.py <dataset_path>")
         sys.exit(1)
 
     dataset_path = sys.argv[1]

@@ -7,19 +7,13 @@ import sys
 import hashlib
 from collections import defaultdict
 from bs4 import BeautifulSoup
+from constants import INDEX_DIR, PARTIAL_DUMP_THRESHOLD, MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE
+
 try:
     from nltk.stem import PorterStemmer
     _stemmer = PorterStemmer()
 except ModuleNotFoundError:
     _stemmer = None
-
-INDEX_DIR = "index_files"
-PARTIAL_DUMP_THRESHOLD = 10000  
-os.makedirs(INDEX_DIR, exist_ok=True)
-
-MAPPING_FILE   = os.path.join(INDEX_DIR, "url_mappings.pkl")
-POSTINGS_FILE  = os.path.join(INDEX_DIR, "postings.bin")
-TERM_DICT_FILE = os.path.join(INDEX_DIR, "term_dict.pkl")
 
 
 def tokenize(text):

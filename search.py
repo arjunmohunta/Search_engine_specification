@@ -1,6 +1,12 @@
 import pickle
+import os
 from indexer import tokenize
 from constants import MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE
+
+def file_check():
+    if not os.path.exists(MAPPING_FILE) or not os.path.exists(TERM_DICT_FILE) or not os.path.exists(POSTINGS_FILE):
+        print("Index files not found. Run M1 first.")
+        exit(1)
 
 def get_query():
     query = input("What would you like to search for?\n")
@@ -17,8 +23,7 @@ def get_postings(terms: list) -> dict:
             if term_info is None:
                 postings[term] = {}
             else:
-                offset = term_info[0]
-                length = term_info[1]
+                offset, length = term_info
                 f.seek(offset)
                 data = f.read(length)
                 postings[term] = pickle.loads(data)
@@ -67,10 +72,23 @@ def search(query_tokens):
     top_5 = get_urls(sorted_docs)
     return top_5
 
-if __name__ == "__main__":
-    query_tokens = get_query()
-    results = search(query_tokens)
+def main():
+    file_check()
+    while True:
+        query_tokens = get_query()
+        if "exit" in query_tokens:
+            break
+        if not query_tokens:
+            print("Please enter a valid query.\n")
+            continue
+        
+        results = search(query_tokens)
+        if not results:
+            print("No results found.")
+        else:
+            print("Here are the top 5 results")
+            for i, url in enumerate(results):
+                print(f"{i+1}: {url}")
 
-    print("Here are the top 5 results")
-    for i, url in enumerate(results):
-        print(f"{i+1}: {url}")
+if __name__ == "__main__":
+    main()

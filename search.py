@@ -34,12 +34,13 @@ def get_term_info(terms: list) -> dict:
             info[term] = offset
     return info
 
-def get_urls(doc_ids: dict) -> list:
+def get_urls(docs: list[tuple]) -> list:
     mapping = None
     with open(MAPPING_FILE, "rb") as f:
         mapping = pickle.load(f)
     
-    urls = [mapping[doc_id] for doc_id in doc_ids.keys()[:5]]
+    urls = [mapping[posting[0]] for posting in docs[:5]]
+    print(f"tfs: {docs[:5]}")
     return urls
 
 def search(query_tokens):
@@ -55,14 +56,14 @@ def search(query_tokens):
         term_docs = term[1].keys()
         common_docs = list(set(common_docs) & set(term_docs))
 
-    for docID in common_docs:
-        for term in sorted_terms:
-            posting = term[1]
+    for term in sorted_terms:
+        posting = term[1]
+        for docID in common_docs:
             if docID not in docs_tf.keys():
                 docs_tf[docID] = 0
-            docs_tf[docID] += posting[docID]
+            docs_tf[docID] += posting[docID]["tf"]
     
-    sorted_docs = sorted(docs_tf.items(), key=lambda item: len(item[1]))
+    sorted_docs = sorted(docs_tf.items(), key=lambda item: item[1], reverse = True)
     
     top_5 = get_urls(sorted_docs)
     return top_5

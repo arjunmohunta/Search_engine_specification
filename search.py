@@ -40,7 +40,6 @@ def get_urls(docs: list[tuple]) -> list:
         mapping = pickle.load(f)
     
     urls = [mapping[posting[0]] for posting in docs[:5]]
-    print(f"tfs: {docs[:5]}")
     return urls
 
 def search(query_tokens):
@@ -74,4 +73,4 @@ if __name__ == "__main__":
 
     print("Here are the top 5 results")
     for i, url in enumerate(results):
-        print(f"{i}: {url}")
+        print(f"{i+1}: {url}")

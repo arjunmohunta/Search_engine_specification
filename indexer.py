@@ -5,9 +5,16 @@ import pickle
 import re
 import sys
 import hashlib
+import warnings
 from collections import defaultdict
 from bs4 import BeautifulSoup
-from constants import INDEX_DIR, PARTIAL_DUMP_THRESHOLD, MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE
+
+# Suppress noisy parser warnings on malformed or non-HTML content in corpus
+warnings.filterwarnings("ignore", category=UserWarning, module="bs4")
+from constants import (
+    INDEX_DIR, PARTIAL_DUMP_THRESHOLD, MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE,
+    TITLE_WEIGHT, HEADING_WEIGHT, BOLD_WEIGHT,
+)
 
 try:
     from nltk.stem import PorterStemmer
@@ -24,11 +31,33 @@ def tokenize(text):
 
 
 def extract_text(html):
+    """Fallback: plain text only (used if structured extraction fails)."""
     try:
         soup = BeautifulSoup(html, "html.parser")
         return soup.get_text()
     except Exception:
         return ""
+
+
+def extract_text_regions(html):
+    """
+    Extract body text plus important regions (title, h1-h3, bold).
+    Returns (body_text, title_text, heading_text, bold_text).
+    Spec: words in bold, headings, and title should be treated as more important.
+    """
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        body_text = soup.get_text()
+        title_text = ""
+        if soup.title and soup.title.string:
+            title_text = soup.title.get_text()
+        heading_tags = soup.find_all(["h1", "h2", "h3"])
+        heading_text = " ".join(t.get_text() for t in heading_tags if t.get_text())
+        bold_tags = soup.find_all(["strong", "b"])
+        bold_text = " ".join(t.get_text() for t in bold_tags if t.get_text())
+        return body_text, title_text, heading_text, bold_text
+    except Exception:
+        return "", "", "", ""
 
 
 class Indexer:
@@ -40,17 +69,26 @@ class Indexer:
         self.seen_hashes = set()   
         self.duplicate_count = 0
 
-    def add_token(self, token, doc_id):
+    def add_token(self, token, doc_id, weight=1.0):
         if token not in self.index:
             self.index[token] = {}
         if doc_id not in self.index[token]:
-            self.index[token][doc_id] = {"tf": 0}
+            self.index[token][doc_id] = {"tf": 0, "wt": 0.0}
         self.index[token][doc_id]["tf"] += 1
+        self.index[token][doc_id]["wt"] += weight
 
     def add_document(self, doc_id, content):
-        text = extract_text(content)
-        for token in tokenize(text):
-            self.add_token(token, doc_id)
+        body_text, title_text, heading_text, bold_text = extract_text_regions(content)
+        # Body: weight 1 (get_text() already includes title/h1/b etc., so we intentionally
+        # double-count: words in title/headings/bold get 1.0 from body + bonus weight.)
+        for token in tokenize(body_text):
+            self.add_token(token, doc_id, 1.0)
+        for token in tokenize(title_text):
+            self.add_token(token, doc_id, TITLE_WEIGHT)
+        for token in tokenize(heading_text):
+            self.add_token(token, doc_id, HEADING_WEIGHT)
+        for token in tokenize(bold_text):
+            self.add_token(token, doc_id, BOLD_WEIGHT)
 
     def flush_partial_index(self):
         """Save current in-memory index as a partial file."""
@@ -87,7 +125,9 @@ class Indexer:
 
                 doc_id = self.doc_count
                 self.doc_count += 1
-                self.mapping[doc_id] = url
+                # Spec: ignore URL fragment
+                url_clean = url.split("#")[0] if url else ""
+                self.mapping[doc_id] = url_clean
 
                 self.add_document(doc_id, content)
 
@@ -97,9 +137,9 @@ class Indexer:
         if self.index:
             self.flush_partial_index()
 
-        
+        # Save mapping and doc_count for TF-IDF (N) in search
         with open(MAPPING_FILE, "wb") as f:
-            pickle.dump(self.mapping, f)
+            pickle.dump((self.mapping, self.doc_count), f)
         print(f"URL mapping saved ({self.doc_count} documents, {self.duplicate_count} duplicates skipped).")
 
     def merge_partials(self):
@@ -122,13 +162,14 @@ class Indexer:
                 for i in term_to_partials[term]:
                     for doc_id, values in partials[i][term].items():
                         if doc_id not in merged:
-                            merged[doc_id] = {"tf": 0}
+                            merged[doc_id] = {"tf": 0, "wt": 0.0}
                         merged[doc_id]["tf"] += values["tf"]
-
+                        merged[doc_id]["wt"] += values.get("wt", values["tf"])
+                df = len(merged)
                 offset = postings_f.tell()
                 data   = pickle.dumps(merged)
                 postings_f.write(data)
-                term_dict[term] = (offset, len(data))
+                term_dict[term] = (offset, len(data), df)
 
                 
         with open(TERM_DICT_FILE, "wb") as f:

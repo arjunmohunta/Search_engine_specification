@@ -1,3 +1,4 @@
+import math
 import pickle
 import os
 from indexer import tokenize
@@ -7,7 +8,7 @@ term_dict = None
 
 def file_check():
     if not os.path.exists(MAPPING_FILE) or not os.path.exists(TERM_DICT_FILE) or not os.path.exists(POSTINGS_FILE):
-        print("Index files not found. Run M1 first.")
+        print("Index files not found. Run indexer first.")
         exit(1)
     global term_dict
     with open(TERM_DICT_FILE, "rb") as f:
@@ -18,7 +19,8 @@ def get_query():
     query_tokens = tokenize(query)
     return query_tokens
 
-def get_postings(terms: list) -> dict:
+def get_postings(terms: list) -> tuple[dict, dict]:
+    """Returns (postings_by_term, term_info_by_term). term_info is (offset, length) or (offset, length, df)."""
     info = get_term_info(terms)
     postings = {}
 
@@ -28,60 +30,84 @@ def get_postings(terms: list) -> dict:
             if term_info is None:
                 postings[term] = {}
             else:
-                offset, length = term_info
+                offset = term_info[0]
+                length = term_info[1]
                 f.seek(offset)
                 data = f.read(length)
                 postings[term] = pickle.loads(data)
-
-    return postings
+    return postings, info
 
 def get_term_info(terms: list) -> dict:
+    """Returns for each term: (offset, length, df) or None. Supports old format (offset, length)."""
     global term_dict
     info = {}
     if term_dict is not None:
         for term in terms:
-            offset = term_dict.get(term, None)
-            info[term] = offset
+            val = term_dict.get(term, None)
+            info[term] = val
     return info
 
-def get_urls(docs: list[tuple]) -> list:
-    mapping = None
+def load_mapping_and_n():
+    """Load (mapping, doc_count N) for URL lookup and TF-IDF."""
     with open(MAPPING_FILE, "rb") as f:
-        mapping = pickle.load(f)
-    urls = None
-    if len(docs) < 5:
-        urls = [mapping[posting[0]] for posting in docs]
+        data = pickle.load(f)
+    if isinstance(data, tuple):
+        mapping, doc_count = data
     else:
-        urls = [mapping[posting[0]] for posting in docs[:5]]
-    return urls
+        mapping = data
+        doc_count = len(mapping)
+    return mapping, doc_count
 
-def search(query_tokens):
-    term_postings = get_postings(query_tokens)
+def get_urls(docs: list[tuple], mapping: dict) -> list:
+    return [mapping[doc_id] for doc_id, _ in docs[:5]]
 
-    # processing queries as AND queries
-    # returns a list of tuples (term, posting) -- posting in format {docID: tf_score}
-    sorted_terms = sorted(term_postings.items(), key=lambda item: len(item[1])) 
-    common_docs = list(sorted_terms[0][1].keys())
-    docs_tf = {}
+def tf_idf_score(N: int, wt: float, df: int) -> float:
+    """TF-IDF component: (1 + log(1 + wt)) * log((N+1)/(df+1)). Uses weighted tf for important words."""
+    if df <= 0:
+        return 0.0
+    tf_comp = 1.0 + math.log(1.0 + wt)
+    idf = math.log((N + 1) / (df + 1))
+    return tf_comp * idf
 
-    for term in sorted_terms:
-        term_docs = term[1].keys()
-        common_docs = list(set(common_docs) & set(term_docs))
 
-    for term in sorted_terms:
-        posting = term[1]
-        for docID in common_docs:
-            if docID not in docs_tf.keys():
-                docs_tf[docID] = 0
-            docs_tf[docID] += posting[docID]["tf"]
-    
-    sorted_docs = sorted(docs_tf.items(), key=lambda item: item[1], reverse = True)
-    
-    top_5 = get_urls(sorted_docs)
-    return top_5
+def search(query_tokens, mapping: dict, N: int):
+    """
+    AND query + TF-IDF ranking with important-words weighting (wt stored by indexer).
+    Returns top 5 URLs.
+    """
+    term_postings, term_info = get_postings(query_tokens)
+    # AND: start with smallest posting list
+    sorted_terms = sorted(term_postings.items(), key=lambda item: len(item[1]))
+    if not sorted_terms or len(sorted_terms[0][1]) == 0:
+        return []
+    common_docs = set(sorted_terms[0][1].keys())
+    for term, posting in sorted_terms[1:]:
+        common_docs &= set(posting.keys())
+    if not common_docs:
+        return []
+
+    # Score each doc by sum of TF-IDF over query terms (using weighted tf)
+    doc_scores = {}
+    for term, posting in sorted_terms:
+        val = term_info.get(term)
+        if val is None:
+            df = 1
+        else:
+            df = val[2] if len(val) >= 3 else len(posting) if posting else 1
+        for doc_id in common_docs:
+            if doc_id not in posting:
+                continue
+            entry = posting[doc_id]
+            wt = entry.get("wt", entry.get("tf", 0))
+            score = tf_idf_score(N, wt, df)
+            doc_scores[doc_id] = doc_scores.get(doc_id, 0.0) + score
+
+    sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+    return get_urls(sorted_docs, mapping)
 
 def main():
     file_check()
+    mapping, N = load_mapping_and_n()
     while True:
         query_tokens = get_query()
         if "exit" in query_tokens:
@@ -89,8 +115,8 @@ def main():
         if not query_tokens:
             print("Please enter a valid query.\n")
             continue
-        
-        results = search(query_tokens)
+
+        results = search(query_tokens, mapping, N)
         if not results:
             print("No results found.")
         else:

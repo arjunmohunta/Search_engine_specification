@@ -9,7 +9,6 @@ import warnings
 from collections import defaultdict
 from bs4 import BeautifulSoup
 
-# Suppress noisy parser warnings on malformed or non-HTML content in corpus
 warnings.filterwarnings("ignore", category=UserWarning, module="bs4")
 from constants import (
     INDEX_DIR, PARTIAL_DUMP_THRESHOLD, MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE,
@@ -79,8 +78,6 @@ class Indexer:
 
     def add_document(self, doc_id, content):
         body_text, title_text, heading_text, bold_text = extract_text_regions(content)
-        # Body: weight 1 (get_text() already includes title/h1/b etc., so we intentionally
-        # double-count: words in title/headings/bold get 1.0 from body + bonus weight.)
         for token in tokenize(body_text):
             self.add_token(token, doc_id, 1.0)
         for token in tokenize(title_text):
@@ -109,14 +106,13 @@ class Indexer:
                     with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
                 except Exception:
-                    continue    # skip bad json files
+                    continue
 
                 content = data.get("content", "")
                 url     = data.get("url", "")
                 if not content or not url:
-                    continue    # if url or content is empty do not continue
+                    continue 
 
-                # use hashes to check for duplicates
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 if content_hash in self.seen_hashes:
                     self.duplicate_count += 1
@@ -125,7 +121,6 @@ class Indexer:
 
                 doc_id = self.doc_count
                 self.doc_count += 1
-                # Spec: ignore URL fragment
                 url_clean = url.split("#")[0] if url else ""
                 self.mapping[doc_id] = url_clean
 
@@ -137,7 +132,6 @@ class Indexer:
         if self.index:
             self.flush_partial_index()
 
-        # Save mapping and doc_count for TF-IDF (N) in search
         with open(MAPPING_FILE, "wb") as f:
             pickle.dump((self.mapping, self.doc_count), f)
         print(f"URL mapping saved ({self.doc_count} documents, {self.duplicate_count} duplicates skipped).")

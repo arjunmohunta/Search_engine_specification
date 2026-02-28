@@ -76,7 +76,6 @@ def search(query_tokens, mapping: dict, N: int):
     Returns top 5 URLs.
     """
     term_postings, term_info = get_postings(query_tokens)
-    # AND: start with smallest posting list
     sorted_terms = sorted(term_postings.items(), key=lambda item: len(item[1]))
     if not sorted_terms or len(sorted_terms[0][1]) == 0:
         return []
@@ -86,7 +85,6 @@ def search(query_tokens, mapping: dict, N: int):
     if not common_docs:
         return []
 
-    # Score each doc by sum of TF-IDF over query terms (using weighted tf)
     doc_scores = {}
     for term, posting in sorted_terms:
         val = term_info.get(term)

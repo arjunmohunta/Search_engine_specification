@@ -3,7 +3,7 @@ import os
 INDEX_DIR = "index_files"
 PARTIAL_DUMP_THRESHOLD = 10000
 
-# Weights for important words (spec: bold, h1-h3, title treated as more important)
+
 TITLE_WEIGHT = 3.0
 HEADING_WEIGHT = 2.0
 BOLD_WEIGHT = 2.0

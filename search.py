@@ -3,10 +3,15 @@ import os
 from indexer import tokenize
 from constants import MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE
 
+term_dict = None
+
 def file_check():
     if not os.path.exists(MAPPING_FILE) or not os.path.exists(TERM_DICT_FILE) or not os.path.exists(POSTINGS_FILE):
         print("Index files not found. Run M1 first.")
         exit(1)
+    global term_dict
+    with open(TERM_DICT_FILE, "rb") as f:
+        term_dict = pickle.load(f)
 
 def get_query():
     query = input("What would you like to search for?\n")
@@ -31,9 +36,9 @@ def get_postings(terms: list) -> dict:
     return postings
 
 def get_term_info(terms: list) -> dict:
+    global term_dict
     info = {}
-    with open(TERM_DICT_FILE, "rb") as f:
-        term_dict = pickle.load(f)
+    if term_dict is not None:
         for term in terms:
             offset = term_dict.get(term, None)
             info[term] = offset
@@ -43,8 +48,11 @@ def get_urls(docs: list[tuple]) -> list:
     mapping = None
     with open(MAPPING_FILE, "rb") as f:
         mapping = pickle.load(f)
-    
-    urls = [mapping[posting[0]] for posting in docs[:5]]
+    urls = None
+    if len(docs) < 5:
+        urls = [mapping[posting[0]] for posting in docs]
+    else:
+        urls = [mapping[posting[0]] for posting in docs[:5]]
     return urls
 
 def search(query_tokens):

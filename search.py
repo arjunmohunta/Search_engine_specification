@@ -65,7 +65,12 @@ def tf_idf_score(N, wt, df):
     return (1.0 + math.log(1.0 + wt)) * math.log((N + 1) / (df + 1))
 
 def is_phrase_match(postings, query_tokens, doc_id):
-    """Return True if query_tokens appear at consecutive body positions in doc_id."""
+    """Return True if query_tokens appear at consecutive body positions in doc_id.
+
+    Note: positions are only recorded for body tokens in the index. Terms that appear
+    exclusively in titles/headings/bold text do not carry positional information, so
+    phrase matching is intentionally limited to the document body.
+    """
     pos_sets = []
     for term in query_tokens:
         entry = postings.get(term, {}).get(doc_id)
@@ -78,7 +83,7 @@ def is_phrase_match(postings, query_tokens, doc_id):
             return True
     return False
 
-def rank_documents(query_tokens, postings, term_info, N):
+def rank_documents(query_tokens, postings, term_info, N, mapping):
     doc_scores = {}
     for term in query_tokens:
         post = postings.get(term, {})
@@ -87,6 +92,14 @@ def rank_documents(query_tokens, postings, term_info, N):
         for doc_id, values in post.items():
             wt = values.get("wt", values.get("tf", 0))
             doc_scores[doc_id] = doc_scores.get(doc_id, 0) + tf_idf_score(N, wt, df)
+
+    # Penalize raw file URLs so HTML pages tend to outrank dataset files.
+    for doc_id in doc_scores:
+        url = mapping.get(doc_id, "")
+        if url.endswith(".txt") or url.endswith(".bib") or url.endswith(".ff"):
+            doc_scores[doc_id] *= 0.3
+        elif "/datasets/" in url:
+            doc_scores[doc_id] *= 0.5
 
     # Blend in PageRank
     if pagerank_scores:
@@ -121,7 +134,7 @@ def search_engine():
             print("Please enter a valid query.\n")
             continue
         postings, term_info = get_postings(query_tokens)
-        sorted_docs = rank_documents(query_tokens, postings, term_info, N)
+        sorted_docs = rank_documents(query_tokens, postings, term_info, N, mapping)
         if not sorted_docs:
             print("No results found.")
         else:

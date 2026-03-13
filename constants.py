@@ -7,6 +7,7 @@ TOP_K_RESULTS  = 10
 TITLE_WEIGHT = 3.0
 HEADING_WEIGHT = 2.0
 BOLD_WEIGHT = 2.0
+ANCHOR_WEIGHT = 1.5
 
 os.makedirs(INDEX_DIR, exist_ok=True)
 

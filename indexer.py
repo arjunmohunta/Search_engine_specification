@@ -6,25 +6,31 @@ import re
 import sys
 import hashlib
 from collections import defaultdict
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse, urlunparse
 import warnings
 from constants import (INDEX_DIR, PARTIAL_DUMP_THRESHOLD, MAPPING_FILE,
                        POSTINGS_FILE, TERM_DICT_FILE, PAGERANK_FILE,
-                       TITLE_WEIGHT, HEADING_WEIGHT, BOLD_WEIGHT,
+                       TITLE_WEIGHT, HEADING_WEIGHT, BOLD_WEIGHT, ANCHOR_WEIGHT,
                        SIMHASH_BITS, SIMHASH_HAMMING_THRESHOLD,
                        PAGERANK_DAMPING, PAGERANK_ITERATIONS)
 
 warnings.filterwarnings("ignore", category=UserWarning, module="bs4")
 try:
-    from bs4 import XMLParsedAsHTMLWarning, MarkupResemblesLocatorWarning
+    from bs4 import XMLParsedAsHTMLWarning, MarkupResemblesLocatorWarning  # type: ignore[import]
     warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
     warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 except ImportError:
     pass
 
 try:
-    from nltk.stem import PorterStemmer
+    from bs4 import BeautifulSoup  # type: ignore[import]
+except ImportError as e:  # pragma: no cover
+    raise ImportError(
+        "BeautifulSoup (bs4) is required. Install it with 'pip install beautifulsoup4'."
+    ) from e
+
+try:
+    from nltk.stem import PorterStemmer  # type: ignore[import]
     _stemmer = PorterStemmer()
 except ModuleNotFoundError:
     _stemmer = None
@@ -36,7 +42,7 @@ def tokenize(text):
     return tokens
 
 def parse_document(html, base_url=""):
-    """Parse HTML into text regions and outgoing links (single pass)."""
+    """Parse HTML into text regions, outgoing links, and anchor text (single pass)."""
     try:
         soup = BeautifulSoup(html, "html.parser")
         body_text = soup.get_text()
@@ -44,6 +50,7 @@ def parse_document(html, base_url=""):
         heading_text = " ".join(t.get_text() for t in soup.find_all(["h1", "h2", "h3"]) if t.get_text())
         bold_text = " ".join(t.get_text() for t in soup.find_all(["b", "strong"]) if t.get_text())
         links = []
+        anchors = []  # (target_url, anchor_text)
         if base_url:
             for a_tag in soup.find_all("a", href=True):
                 href = a_tag["href"].strip()
@@ -51,13 +58,16 @@ def parse_document(html, base_url=""):
                     continue
                 full_url = urljoin(base_url, href).split("#")[0]
                 links.append(full_url)
-        return body_text, title_text, heading_text, bold_text, links
+                anchor_text = a_tag.get_text(" ", strip=True)
+                if anchor_text:
+                    anchors.append((full_url, anchor_text))
+        return body_text, title_text, heading_text, bold_text, links, anchors
     except Exception:
-        return "", "", "", "", []
+        return "", "", "", "", [], []
 
 # Compatibility alias for any external callers
 def extract_text_regions(html):
-    body, title, heading, bold, _ = parse_document(html)
+    body, title, heading, bold, _, _ = parse_document(html)
     return body, title, heading, bold
 
 
@@ -99,7 +109,8 @@ class Indexer:
         self.seen_simhashes = [] # list of SimHash fingerprints
         self.duplicate_count = 0
         self.near_duplicate_count = 0
-        self.raw_links = {} # doc_id -> [outgoing urls]
+        self.raw_links = {}  # doc_id -> [outgoing urls]
+        self.anchor_texts = defaultdict(list)  # target_url -> [anchor strings]
 
     def add_token(self, token, doc_id, weight=1.0, position=None):
         if token not in self.index:
@@ -132,6 +143,7 @@ class Indexer:
         self.index = {}
 
     def process_directory(self, root_dir):
+        print("URL normalization enabled: query parameters stripped")
         for root, _, files in os.walk(root_dir):
             for file in files:
                 if not file.endswith(".json"):
@@ -156,11 +168,15 @@ class Indexer:
                 self.seen_hashes.add(content_hash)
 
                 # Parse HTML once
-                body, title, heading, bold, links = parse_document(content, url)
+                body, title, heading, bold, links, anchors = parse_document(content, url)
 
                 # Near-duplicate check (SimHash)
                 # Cap body length for speed; include title for distinctiveness
                 sh = simhash(tokenize(body[:5000] + " " + title))
+                # NOTE: this linear scan over all previously seen SimHash fingerprints is
+                # O(n) per document. For a production-scale system you would replace this
+                # with an LSH/banding scheme to get sub-linear near-duplicate lookups,
+                # but for a corpus of ~56k documents this is acceptable and keeps code simple.
                 if any(hamming_distance(sh, seen) <= SIMHASH_HAMMING_THRESHOLD
                        for seen in self.seen_simhashes):
                     self.near_duplicate_count += 1
@@ -169,11 +185,34 @@ class Indexer:
 
                 doc_id = self.doc_count
                 self.doc_count += 1
-                self.mapping[doc_id] = url.split("#")[0]
+
+                # Normalize URL by stripping query parameters and fragments so that
+                # different wiki revision URLs map to the same canonical URL.
+                parsed = urlparse(url)
+                clean_url = urlunparse(parsed._replace(query="", fragment=""))
+                self.mapping[doc_id] = clean_url
                 self.raw_links[doc_id] = links
+
+                # Collect anchor text pointing to other URLs; indexed after mapping is complete
+                for target_url, anchor_text in anchors:
+                    self.anchor_texts[target_url].append(anchor_text)
 
                 self.add_document(doc_id, body, title, heading, bold)
 
+                if len(self.index) >= PARTIAL_DUMP_THRESHOLD:
+                    self.flush_partial_index()
+
+        # After we have seen all documents and built the URL→doc_id mapping,
+        # go back and index anchor text for the *target* pages using ANCHOR_WEIGHT.
+        if self.anchor_texts:
+            url_to_docid = {url: doc_id for doc_id, url in self.mapping.items()}
+            for target_url, texts in self.anchor_texts.items():
+                doc_id = url_to_docid.get(target_url)
+                if doc_id is None:
+                    continue
+                anchor_corpus = " ".join(texts)
+                for token in tokenize(anchor_corpus):
+                    self.add_token(token, doc_id, ANCHOR_WEIGHT)
                 if len(self.index) >= PARTIAL_DUMP_THRESHOLD:
                     self.flush_partial_index()
 
@@ -234,7 +273,10 @@ class Indexer:
         in_links = defaultdict(set)
         for doc_id, urls in self.raw_links.items():
             for url in urls:
-                target = url_to_docid.get(url)
+                # Apply the same URL normalization used when populating self.mapping
+                parsed = urlparse(url)
+                clean_url = urlunparse(parsed._replace(query="", fragment=""))
+                target = url_to_docid.get(clean_url)
                 if target is not None and target != doc_id:
                     out_links[doc_id].add(target)
                     in_links[target].add(doc_id)

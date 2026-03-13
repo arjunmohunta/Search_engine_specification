@@ -94,12 +94,24 @@ def rank_documents(query_tokens, postings, term_info, N, mapping):
             doc_scores[doc_id] = doc_scores.get(doc_id, 0) + tf_idf_score(N, wt, df)
 
     # Penalize raw file URLs so HTML pages tend to outrank dataset files.
+    # Penalties stack (multiply together).
+    WEB_EXTENSIONS = (".html", ".htm", ".php")
+    DATASET_TXT_KEYWORDS = ("random", "dvd", "maven", "contents")
+
     for doc_id in doc_scores:
         url = mapping.get(doc_id, "")
+        mult = 1.0
         if url.endswith(".txt") or url.endswith(".bib") or url.endswith(".ff"):
-            doc_scores[doc_id] *= 0.3
-        elif "/datasets/" in url:
-            doc_scores[doc_id] *= 0.5
+            mult *= 0.1
+        if "/datasets/" in url:
+            mult *= 0.2
+        if url.endswith(".txt"):
+            url_lower = url.lower()
+            if any(kw in url_lower for kw in DATASET_TXT_KEYWORDS):
+                mult *= 0.15
+        if not url.endswith(WEB_EXTENSIONS):
+            mult *= 0.4
+        doc_scores[doc_id] *= mult
 
     # Blend in PageRank
     if pagerank_scores:
@@ -117,7 +129,16 @@ def rank_documents(query_tokens, postings, term_info, N, mapping):
     return sorted_docs
 
 def get_top_urls(sorted_docs, mapping, top_k=TOP_K_RESULTS):
-    return [mapping[doc_id] for doc_id, _ in sorted_docs[:top_k]]
+    seen = set()
+    urls = []
+    for doc_id, _ in sorted_docs:
+        url = mapping[doc_id]
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+        if len(urls) >= top_k:
+            break
+    return urls
 
 def search_engine():
     check_index_files()

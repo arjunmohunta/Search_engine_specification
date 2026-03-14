@@ -15,6 +15,8 @@ MAPPING_FILE   = os.path.join(INDEX_DIR, "url_mappings.pkl")
 POSTINGS_FILE  = os.path.join(INDEX_DIR, "postings.bin")
 TERM_DICT_FILE = os.path.join(INDEX_DIR, "term_dict.pkl")
 PAGERANK_FILE  = os.path.join(INDEX_DIR, "pagerank.pkl")
+HITS_FILE      = os.path.join(INDEX_DIR, "hits.pkl")
+HITS_ALPHA     = 0.2  # authority blend weight
 
 # Near-duplicate detection (SimHash)
 SIMHASH_BITS = 64

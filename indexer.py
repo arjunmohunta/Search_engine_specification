@@ -9,7 +9,7 @@ from collections import defaultdict
 from urllib.parse import urljoin, urlparse, urlunparse
 import warnings
 from constants import (INDEX_DIR, PARTIAL_DUMP_THRESHOLD, MAPPING_FILE,
-                       POSTINGS_FILE, TERM_DICT_FILE, PAGERANK_FILE,
+                       POSTINGS_FILE, TERM_DICT_FILE, PAGERANK_FILE, HITS_FILE,
                        TITLE_WEIGHT, HEADING_WEIGHT, BOLD_WEIGHT, ANCHOR_WEIGHT,
                        SIMHASH_BITS, SIMHASH_HAMMING_THRESHOLD,
                        PAGERANK_DAMPING, PAGERANK_ITERATIONS)
@@ -127,6 +127,10 @@ class Indexer:
         body_tokens = tokenize(body)
         for pos, token in enumerate(body_tokens):
             self.add_token(token, doc_id, 1.0, position=pos)
+        # Bigrams from body: "word1_word2", weight 1.5, position = first word index
+        for i in range(len(body_tokens) - 1):
+            bigram = body_tokens[i] + "_" + body_tokens[i + 1]
+            self.add_token(bigram, doc_id, 1.5, position=i)
         for token in tokenize(title):
             self.add_token(token, doc_id, TITLE_WEIGHT)
         for token in tokenize(heading):
@@ -306,6 +310,59 @@ class Indexer:
         print(f"Saved PageRank scores for {N} documents.")
         return scores
 
+    # -----------------------------------------------------------------------
+    # HITS (Hub and Authority)
+    # -----------------------------------------------------------------------
+
+    def compute_hits(self):
+        """Run HITS (power iteration, 20 iterations), normalize hub/authority to [0,1], save to hits.pkl."""
+        url_to_docid = {url: doc_id for doc_id, url in self.mapping.items()}
+        N = self.doc_count
+        if N == 0:
+            return {}
+
+        # Build in-corpus link graph (same as PageRank)
+        out_links = defaultdict(set)
+        in_links = defaultdict(set)
+        for doc_id, urls in self.raw_links.items():
+            for url in urls:
+                parsed = urlparse(url)
+                clean_url = urlunparse(parsed._replace(query="", fragment=""))
+                target = url_to_docid.get(clean_url)
+                if target is not None and target != doc_id:
+                    out_links[doc_id].add(target)
+                    in_links[target].add(doc_id)
+
+        # HITS power iteration: 20 iterations
+        hub = {doc_id: 1.0 for doc_id in range(N)}
+        authority = {doc_id: 1.0 for doc_id in range(N)}
+        for _ in range(20):
+            new_authority = {}
+            for doc_id in range(N):
+                new_authority[doc_id] = sum(hub[src] for src in in_links[doc_id])
+            new_hub = {}
+            for doc_id in range(N):
+                new_hub[doc_id] = sum(authority[tgt] for tgt in out_links[doc_id])
+            hub = new_hub
+            authority = new_authority
+
+            # Normalize to [0, 1] each iteration (scale by max)
+            max_h = max(hub.values()) if hub else 1.0
+            if max_h > 0:
+                hub = {d: hub[d] / max_h for d in hub}
+            max_a = max(authority.values()) if authority else 1.0
+            if max_a > 0:
+                authority = {d: authority[d] / max_a for d in authority}
+
+        hits = {
+            doc_id: {"hub": hub[doc_id], "authority": authority[doc_id]}
+            for doc_id in range(N)
+        }
+        with open(HITS_FILE, "wb") as f:
+            pickle.dump(hits, f)
+        print(f"Saved HITS scores for {N} documents.")
+        return hits
+
     def compute_analytics(self, term_dict):
         total_size = (
             os.path.getsize(POSTINGS_FILE) +
@@ -328,6 +385,7 @@ if __name__ == "__main__":
     dataset_path = sys.argv[1]
     indexer = Indexer()
     indexer.process_directory(dataset_path)
-    term_dict = indexer.merge_partials()
+    term_dict =     indexer.merge_partials()
     indexer.compute_pagerank()
+    indexer.compute_hits()
     indexer.compute_analytics(term_dict)

@@ -7,6 +7,7 @@ from indexer import tokenize
 from search import (
     check_index_files,
     load_mapping_and_doc_count,
+    get_bigrams,
     get_postings,
     rank_documents,
     get_top_urls,
@@ -38,8 +39,10 @@ def main():
 
         start = time()
         query_tokens = tokenize(q)
-        postings, term_info = get_postings(query_tokens)
-        sorted_docs = rank_documents(query_tokens, postings, term_info, doc_count, mapping)
+        query_bigrams = get_bigrams(query_tokens)
+        all_terms = query_tokens + query_bigrams
+        postings, term_info = get_postings(all_terms)
+        sorted_docs = rank_documents(query_tokens, postings, term_info, doc_count, mapping, query_bigrams)
         urls = get_top_urls(sorted_docs, mapping)
         elapsed_ms = (time() - start) * 1000.0
 

@@ -2,13 +2,14 @@ import math
 import pickle
 import os
 from indexer import tokenize
-from constants import MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE, PAGERANK_FILE, PAGERANK_ALPHA, TOP_K_RESULTS
+from constants import MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE, PAGERANK_FILE, PAGERANK_ALPHA, HITS_FILE, HITS_ALPHA, TOP_K_RESULTS
 
 term_dict = None
 pagerank_scores = None
+hits_scores = None
 
 def check_index_files():
-    global term_dict, pagerank_scores
+    global term_dict, pagerank_scores, hits_scores
     if not all(os.path.exists(f) for f in [MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE]):
         print("Index files not found. Run indexer first.")
         exit(1)
@@ -17,6 +18,9 @@ def check_index_files():
     if os.path.exists(PAGERANK_FILE):
         with open(PAGERANK_FILE, "rb") as f:
             pagerank_scores = pickle.load(f)
+    if os.path.exists(HITS_FILE):
+        with open(HITS_FILE, "rb") as f:
+            hits_scores = pickle.load(f)
 
 def load_mapping_and_doc_count():
     with open(MAPPING_FILE, "rb") as f:
@@ -31,6 +35,10 @@ def load_mapping_and_doc_count():
 def get_query_tokens():
     query = input("Enter search query (or 'exit' to quit):\n")
     return tokenize(query)
+
+def get_bigrams(tokens):
+    """Generate bigram strings from token list: 'word1_word2'."""
+    return [tokens[i] + "_" + tokens[i + 1] for i in range(len(tokens) - 1)]
 
 def get_term_info(terms):
     info = {}
@@ -83,7 +91,7 @@ def is_phrase_match(postings, query_tokens, doc_id):
             return True
     return False
 
-def rank_documents(query_tokens, postings, term_info, N, mapping):
+def rank_documents(query_tokens, postings, term_info, N, mapping, query_bigrams=None):
     doc_scores = {}
     for term in query_tokens:
         post = postings.get(term, {})
@@ -92,6 +100,16 @@ def rank_documents(query_tokens, postings, term_info, N, mapping):
         for doc_id, values in post.items():
             wt = values.get("wt", values.get("tf", 0))
             doc_scores[doc_id] = doc_scores.get(doc_id, 0) + tf_idf_score(N, wt, df)
+
+    # Bigram scores with 1.5x weight multiplier
+    if query_bigrams:
+        for term in query_bigrams:
+            post = postings.get(term, {})
+            info = term_info.get(term)
+            df = info["df"] if info and info.get("df") is not None else (len(post) if post else 1)
+            for doc_id, values in post.items():
+                wt = values.get("wt", values.get("tf", 0))
+                doc_scores[doc_id] = doc_scores.get(doc_id, 0) + 1.5 * tf_idf_score(N, wt, df)
 
     # Penalize raw file URLs so HTML pages tend to outrank dataset files.
     # Penalties stack (multiply together).
@@ -118,6 +136,12 @@ def rank_documents(query_tokens, postings, term_info, N, mapping):
         for doc_id in doc_scores:
             pr = pagerank_scores.get(doc_id, 0.0)
             doc_scores[doc_id] *= (1.0 + PAGERANK_ALPHA * pr)
+
+    # Blend in HITS authority
+    if hits_scores:
+        for doc_id in doc_scores:
+            authority = hits_scores.get(doc_id, {}).get("authority", 0.0)
+            doc_scores[doc_id] *= (1.0 + HITS_ALPHA * authority)
 
     # Phrase bonus: 2× score if all tokens appear consecutively (positional index)
     if len(query_tokens) > 1:
@@ -154,8 +178,10 @@ def search_engine():
         if not query_tokens:
             print("Please enter a valid query.\n")
             continue
-        postings, term_info = get_postings(query_tokens)
-        sorted_docs = rank_documents(query_tokens, postings, term_info, N, mapping)
+        query_bigrams = get_bigrams(query_tokens)
+        all_terms = query_tokens + query_bigrams
+        postings, term_info = get_postings(all_terms)
+        sorted_docs = rank_documents(query_tokens, postings, term_info, N, mapping, query_bigrams)
         if not sorted_docs:
             print("No results found.")
         else:

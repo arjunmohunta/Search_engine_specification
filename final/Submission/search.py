@@ -9,6 +9,7 @@ pagerank_scores = None
 hits_scores = None
 
 def check_index_files():
+    # checks that files needed for search engine exist
     global term_dict, pagerank_scores, hits_scores
     if not all(os.path.exists(f) for f in [MAPPING_FILE, POSTINGS_FILE, TERM_DICT_FILE]):
         print("Index files not found. Run indexer first.")
@@ -23,6 +24,7 @@ def check_index_files():
             hits_scores = pickle.load(f)
 
 def load_mapping_and_doc_count():
+    # loads document->id mapping once
     with open(MAPPING_FILE, "rb") as f:
         data = pickle.load(f)
     if isinstance(data, tuple):
@@ -41,6 +43,9 @@ def get_bigrams(tokens):
     return [tokens[i] + "_" + tokens[i + 1] for i in range(len(tokens) - 1)]
 
 def get_term_info(terms):
+    """
+    Grab the offset, length, and doc freq. of the terms
+    """
     info = {}
     for term in terms:
         val = term_dict.get(term)
@@ -54,6 +59,9 @@ def get_term_info(terms):
     return info
 
 def get_postings(terms):
+    """
+    Grab the postings of each term based on the offset and length of term data
+    """
     postings = {}
     term_info = get_term_info(terms)
     with open(POSTINGS_FILE, "rb") as f:
@@ -68,6 +76,9 @@ def get_postings(terms):
     return postings, term_info
 
 def tf_idf_score(N, wt, df):
+    """
+    Calculates the tf-idf score
+    """
     if df <= 0:
         return 0.0
     return (1.0 + math.log(1.0 + wt)) * math.log((N + 1) / (df + 1))
@@ -94,20 +105,24 @@ def is_phrase_match(postings, query_tokens, doc_id):
 def rank_documents(query_tokens, postings, term_info, N, mapping, query_bigrams=None):
     doc_scores = {}
     for term in query_tokens:
+        # get term posting and document frequency
         post = postings.get(term, {})
         info = term_info.get(term)
         df = info["df"] if info and info.get("df") is not None else (len(post) if post else 1)
         for doc_id, values in post.items():
+            # update document scores to include tf-idf scores
             wt = values.get("wt", values.get("tf", 0))
             doc_scores[doc_id] = doc_scores.get(doc_id, 0) + tf_idf_score(N, wt, df)
 
     # Bigram scores with 1.5x weight multiplier
     if query_bigrams:
         for term in query_bigrams:
+            # get bigram posting and document frequency
             post = postings.get(term, {})
             info = term_info.get(term)
             df = info["df"] if info and info.get("df") is not None else (len(post) if post else 1)
             for doc_id, values in post.items():
+                # update document score to include tf-idf score with 1.5 weight for bigrams
                 wt = values.get("wt", values.get("tf", 0))
                 doc_scores[doc_id] = doc_scores.get(doc_id, 0) + 1.5 * tf_idf_score(N, wt, df)
 
@@ -134,25 +149,31 @@ def rank_documents(query_tokens, postings, term_info, N, mapping, query_bigrams=
     # Blend in PageRank
     if pagerank_scores:
         for doc_id in doc_scores:
+            # update document score to include pagerank weight
             pr = pagerank_scores.get(doc_id, 0.0)
             doc_scores[doc_id] *= (1.0 + PAGERANK_ALPHA * pr)
 
     # Blend in HITS authority
     if hits_scores:
         for doc_id in doc_scores:
+            # update document score to include HITS weight
             authority = hits_scores.get(doc_id, {}).get("authority", 0.0)
             doc_scores[doc_id] *= (1.0 + HITS_ALPHA * authority)
 
     # Phrase bonus: 2× score if all tokens appear consecutively (positional index)
     if len(query_tokens) > 1:
         for doc_id in list(doc_scores.keys()):
+            # Upweight the doc score if query terms appear in sequence
             if is_phrase_match(postings, query_tokens, doc_id):
                 doc_scores[doc_id] *= 2.0
 
-    sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+    sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True) # sort scores in descending order
     return sorted_docs
 
 def get_top_urls(sorted_docs, mapping, top_k=TOP_K_RESULTS):
+    """
+    Return the top k urls
+    """
     seen = set()
     urls = []
     for doc_id, _ in sorted_docs:
@@ -172,15 +193,21 @@ def search_engine():
 
     while True:
         query_tokens = get_query_tokens()
+        # query validity check
         if "exit" in query_tokens:
             print("Exiting search engine.")
             break
         if not query_tokens:
             print("Please enter a valid query.\n")
             continue
+        
+        # combine single-term tokens and bigram tokens
         query_bigrams = get_bigrams(query_tokens)
         all_terms = query_tokens + query_bigrams
+        # get all postings of all tokens
         postings, term_info = get_postings(all_terms)
+
+        # rank documents and output results
         sorted_docs = rank_documents(query_tokens, postings, term_info, N, mapping, query_bigrams)
         if not sorted_docs:
             print("No results found.")

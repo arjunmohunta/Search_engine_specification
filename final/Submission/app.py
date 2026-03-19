@@ -22,26 +22,31 @@ def load_index():
 
 
 def main():
-    st.set_page_config(page_title="ICS Search Engine", page_icon="🔍", layout="centered")
-    st.title("ICS Search Engine")
+    st.set_page_config(page_title="ICS Search Engine", page_icon="🔍", layout="centered") # setup page layout
+    st.title("ICS Search Engine") # set page title
 
     mapping, doc_count = load_index()
-    st.caption(f"Indexed documents: {doc_count}")
+    st.caption(f"Indexed documents: {doc_count}") # adding smaller font
 
-    query = st.text_input("Search", placeholder="Enter your query", label_visibility="collapsed")
+    query = st.text_input("Search", placeholder="Enter your query", label_visibility="collapsed") # create a search box for the user to input query
     search_clicked = st.button("Search")
 
     if search_clicked or (query and query.strip()):
         q = (query or "").strip()
-        if not q:
+        if not q: # query validity check
             st.info("Enter a query and click Search.")
             return
 
         start = time()
+        # combine single-term tokens and bigram tokens
         query_tokens = tokenize(q)
         query_bigrams = get_bigrams(query_tokens)
         all_terms = query_tokens + query_bigrams
+
+        # get all postings of all tokens
         postings, term_info = get_postings(all_terms)
+
+        # rank documents and output results
         sorted_docs = rank_documents(query_tokens, postings, term_info, doc_count, mapping, query_bigrams)
         urls = get_top_urls(sorted_docs, mapping)
         elapsed_ms = (time() - start) * 1000.0

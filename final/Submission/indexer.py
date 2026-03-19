@@ -14,6 +14,7 @@ from constants import (INDEX_DIR, PARTIAL_DUMP_THRESHOLD, MAPPING_FILE,
                        SIMHASH_BITS, SIMHASH_HAMMING_THRESHOLD,
                        PAGERANK_DAMPING, PAGERANK_ITERATIONS)
 
+# ignore warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="bs4")
 try:
     from bs4 import XMLParsedAsHTMLWarning, MarkupResemblesLocatorWarning  # type: ignore[import]
@@ -45,10 +46,12 @@ def parse_document(html, base_url=""):
     """Parse HTML into text regions, outgoing links, and anchor text (single pass)."""
     try:
         soup = BeautifulSoup(html, "html.parser")
+        # grab the body, title, heading, and bold text
         body_text = soup.get_text()
         title_text = soup.title.get_text() if soup.title and soup.title.string else ""
         heading_text = " ".join(t.get_text() for t in soup.find_all(["h1", "h2", "h3"]) if t.get_text())
         bold_text = " ".join(t.get_text() for t in soup.find_all(["b", "strong"]) if t.get_text())
+        # grab links and anchors
         links = []
         anchors = []  # (target_url, anchor_text)
         if base_url:
@@ -114,9 +117,9 @@ class Indexer:
 
     def add_token(self, token, doc_id, weight=1.0, position=None):
         if token not in self.index:
-            self.index[token] = {}
+            self.index[token] = {} # create a new token entry in index if it's a new token
         if doc_id not in self.index[token]:
-            self.index[token][doc_id] = {"tf": 0, "wt": 0.0, "pos": []}
+            self.index[token][doc_id] = {"tf": 0, "wt": 0.0, "pos": []} # create a new doc entry in the token's postiing if new doc
         self.index[token][doc_id]["tf"] += 1
         self.index[token][doc_id]["wt"] += weight
         if position is not None:
@@ -125,16 +128,23 @@ class Indexer:
     def add_document(self, doc_id, body, title, heading, bold):
         """Index pre-parsed text regions, storing body token positions."""
         body_tokens = tokenize(body)
+        # add body tokens
         for pos, token in enumerate(body_tokens):
             self.add_token(token, doc_id, 1.0, position=pos)
         # Bigrams from body: "word1_word2", weight 1.5, position = first word index
         for i in range(len(body_tokens) - 1):
             bigram = body_tokens[i] + "_" + body_tokens[i + 1]
             self.add_token(bigram, doc_id, 1.5, position=i)
+        
+        # add title tokens with title weight
         for token in tokenize(title):
             self.add_token(token, doc_id, TITLE_WEIGHT)
+
+        # add heading tokens with heading weight
         for token in tokenize(heading):
             self.add_token(token, doc_id, HEADING_WEIGHT)
+
+        # add bold tokens with bold weight
         for token in tokenize(bold):
             self.add_token(token, doc_id, BOLD_WEIGHT)
 
@@ -150,7 +160,7 @@ class Indexer:
         print("URL normalization enabled: query parameters stripped")
         for root, _, files in os.walk(root_dir):
             for file in files:
-                if not file.endswith(".json"):
+                if not file.endswith(".json"): # only work with the json files of DEV
                     continue
                 path = os.path.join(root, file)
                 try:
@@ -162,7 +172,7 @@ class Indexer:
                 content = data.get("content", "")
                 url     = data.get("url", "")
                 if not content or not url:
-                    continue
+                    continue # do not parse through files that don't have any content or a url
 
                 # Exact duplicate check (SHA-256)
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -184,7 +194,7 @@ class Indexer:
                 if any(hamming_distance(sh, seen) <= SIMHASH_HAMMING_THRESHOLD
                        for seen in self.seen_simhashes):
                     self.near_duplicate_count += 1
-                    continue
+                    continue # do not add file to index if it is a near duplicate
                 self.seen_simhashes.append(sh)
 
                 doc_id = self.doc_count
@@ -201,9 +211,9 @@ class Indexer:
                 for target_url, anchor_text in anchors:
                     self.anchor_texts[target_url].append(anchor_text)
 
-                self.add_document(doc_id, body, title, heading, bold)
+                self.add_document(doc_id, body, title, heading, bold) # add the document to the tokens' postings
 
-                if len(self.index) >= PARTIAL_DUMP_THRESHOLD:
+                if len(self.index) >= PARTIAL_DUMP_THRESHOLD: # flush current index if size reaches a theshold
                     self.flush_partial_index()
 
         # After we have seen all documents and built the URL→doc_id mapping,
@@ -216,13 +226,15 @@ class Indexer:
                     continue
                 anchor_corpus = " ".join(texts)
                 for token in tokenize(anchor_corpus):
-                    self.add_token(token, doc_id, ANCHOR_WEIGHT)
+                    self.add_token(token, doc_id, ANCHOR_WEIGHT) # adding extra weight to the tokens if they are part of the anchor text
                 if len(self.index) >= PARTIAL_DUMP_THRESHOLD:
                     self.flush_partial_index()
 
+        # final partial index flush
         if self.index:
             self.flush_partial_index()
 
+        # store docid -> url mapping in file
         with open(MAPPING_FILE, "wb") as f:
             pickle.dump((self.mapping, self.doc_count), f)
         print(f"Saved mapping ({self.doc_count} docs, "
@@ -231,6 +243,7 @@ class Indexer:
     def merge_partials(self):
         partials = {}
         term_to_partials = defaultdict(list)
+        # load in all indexed terms from the other partial indexes
         for i in range(self.partial_index_count):
             filename = os.path.join(INDEX_DIR, f"partial_{i}.pkl")
             with open(filename, "rb") as f:
@@ -240,10 +253,11 @@ class Indexer:
 
         term_dict = {}
         with open(POSTINGS_FILE, "wb") as postings_f:
-            for term in sorted(term_to_partials):
+            for term in sorted(term_to_partials): # go through each term
                 merged = {}
-                for i in term_to_partials[term]:
-                    for doc_id, values in partials[i][term].items():
+                for i in term_to_partials[term]: # go through each partial index that the term is in
+                    for doc_id, values in partials[i][term].items(): # go through each doc in postings list
+                        # combine term stats
                         if doc_id not in merged:
                             merged[doc_id] = {"tf": 0, "wt": 0.0, "pos": []}
                         merged[doc_id]["tf"] += values["tf"]
@@ -254,7 +268,7 @@ class Indexer:
                 offset = postings_f.tell()
                 data = pickle.dumps(merged)
                 postings_f.write(data)
-                term_dict[term] = (offset, len(data), df)
+                term_dict[term] = (offset, len(data), df) # record offset and length of term posting in index
 
         with open(TERM_DICT_FILE, "wb") as f:
             pickle.dump(term_dict, f)
@@ -275,23 +289,23 @@ class Indexer:
         # Build adjacency lists (within-corpus links only)
         out_links = defaultdict(set)
         in_links = defaultdict(set)
-        for doc_id, urls in self.raw_links.items():
+        for doc_id, urls in self.raw_links.items(): # going through each doc and the docs that it links to
             for url in urls:
                 # Apply the same URL normalization used when populating self.mapping
                 parsed = urlparse(url)
                 clean_url = urlunparse(parsed._replace(query="", fragment=""))
                 target = url_to_docid.get(clean_url)
-                if target is not None and target != doc_id:
-                    out_links[doc_id].add(target)
-                    in_links[target].add(doc_id)
+                if target is not None and target != doc_id: # make sure target exist and does not refer to the original doc
+                    out_links[doc_id].add(target) # current doc refers to other docs
+                    in_links[target].add(doc_id) # other doc is referred to by current doc
 
         # Power-iteration PageRank
-        scores = {doc_id: 1.0 / N for doc_id in range(N)}
+        scores = {doc_id: 1.0 / N for doc_id in range(N)} # set initial score for each doc to 1/N
         d = PAGERANK_DAMPING
 
         for _ in range(PAGERANK_ITERATIONS):
             new_scores = {}
-            for doc_id in range(N):
+            for doc_id in range(N): # creating new pagerank score for each iteration
                 rank = (1.0 - d) / N
                 for src in in_links[doc_id]:
                     out_count = len(out_links[src])
@@ -324,19 +338,21 @@ class Indexer:
         # Build in-corpus link graph (same as PageRank)
         out_links = defaultdict(set)
         in_links = defaultdict(set)
-        for doc_id, urls in self.raw_links.items():
+        for doc_id, urls in self.raw_links.items(): # going through each doc and the docs that it links to
             for url in urls:
+                # Apply the same URL normalization used when populating self.mapping
                 parsed = urlparse(url)
                 clean_url = urlunparse(parsed._replace(query="", fragment=""))
                 target = url_to_docid.get(clean_url)
-                if target is not None and target != doc_id:
-                    out_links[doc_id].add(target)
-                    in_links[target].add(doc_id)
+                if target is not None and target != doc_id: # make sure target exist and does not refer to the original doc
+                    out_links[doc_id].add(target) # current doc refers to other docs
+                    in_links[target].add(doc_id) # other doc is referred to by current doc
 
         # HITS power iteration: 20 iterations
+        # initialize all hub and authority scores to 1
         hub = {doc_id: 1.0 for doc_id in range(N)}
         authority = {doc_id: 1.0 for doc_id in range(N)}
-        for _ in range(20):
+        for _ in range(20): # iteratively compute hub and authority scores for all docs
             new_authority = {}
             for doc_id in range(N):
                 new_authority[doc_id] = sum(hub[src] for src in in_links[doc_id])
